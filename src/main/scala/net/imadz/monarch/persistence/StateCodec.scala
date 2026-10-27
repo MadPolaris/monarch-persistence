@@ -1,11 +1,11 @@
 package net.imadz.monarch.persistence
 
-/** Host-provided serialization for the run-state snapshot journaled in `StageDone`.
+/** Host-provided encoding for the business state carried by clean/resolved checkpoints.
   *
-  * The journal stores `Array[Byte]` (Jackson-friendly); how your `S` becomes bytes
-  * is host policy — circe / play-json / upickle, protobuf, or plain Java serialization.
-  * Keep the encoding stable across deploys: old snapshots must still decode after
-  * a restart, otherwise recovery cannot rebuild the resume state.
+  * Protobuf encodes the outer durable protocol; this codec supplies its state bytes.
+  * Encoding compatibility and durable artifact availability are host responsibilities.
+  * Keep state compact, and ensure old checkpoint bytes still decode after deploys.
+  * This codec does not serialize the generic remote StartRun command or its ActorRef.
   */
 trait StateCodec[S] {
   def encode(state: S): Array[Byte]

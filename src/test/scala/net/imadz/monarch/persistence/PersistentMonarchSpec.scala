@@ -18,7 +18,8 @@ import scala.concurrent.duration._
   *   2. after a and b journal their StageDone, stop the actor (crash);
   *   3. spawn again with the same persistenceId: recovery must resume from c
   *      WITHOUT re-running a or b;
-  *   4. opening the gate lets the recovered run finish; each stage ran exactly once.
+  *   4. opening the gate finishes the recovered run; c legitimately ran twice because
+  *      its first attempt had no acknowledged checkpoint.
   */
 class PersistentMonarchSpec
     extends ScalaTestWithActorTestKit(
@@ -49,7 +50,10 @@ class PersistentMonarchSpec
 
       val gateC = Promise[Unit]()
       val donePromise = Promise[String]()
-      val observer = new RunObserver[String] {
+      val committed = testKit.createTestProbe[String]()
+      val observer = new DurableRunObserver[String] {
+        override def onCheckpointCommitted(cursor: String, metadata: Map[String, String], snapshot: String): Unit =
+          committed.ref ! cursor
         override def onCompleted(runId: String): Unit = { donePromise.trySuccess(runId); () }
       }
 
@@ -73,8 +77,8 @@ class PersistentMonarchSpec
       probe.expectMessage(PersistentMonarch.Accepted("run-1"))
 
       // a and b complete and journal; c starts and blocks on the gate.
-      eventually { countOf(started, "a") shouldBe 1 }
-      eventually { countOf(started, "b") shouldBe 1 }
+      committed.expectMessage("a#0")
+      committed.expectMessage("b#1")
       eventually { countOf(started, "c") shouldBe 1 }
 
       // ---- crash ----
@@ -83,7 +87,6 @@ class PersistentMonarchSpec
       // ---- restart: same persistenceId replays the journal, resumes from c ----
       testKit.spawn(behavior(), "run-1")
       eventually { countOf(started, "c") shouldBe 2 }
-      Thread.sleep(500) // give any stray re-execution a chance to show up
       countOf(started, "a") shouldBe 1
       countOf(started, "b") shouldBe 1
 

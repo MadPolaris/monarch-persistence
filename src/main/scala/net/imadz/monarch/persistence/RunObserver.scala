@@ -13,6 +13,14 @@ trait RunObserver[S] {
   def onFailed(runId: String, cursor: String, reason: String): Unit = ()
 }
 
+/** Optional durable notifications. These are distinct from execution completion;
+  * a resolved checkpoint advances recovery progress without being a clean success.
+  */
+trait DurableRunObserver[S] extends RunObserver[S] {
+  def onCheckpointCommitted(cursor: String, metadata: Map[String, String], snapshot: S): Unit = ()
+  def onResolutionCommitted(cursor: String, error: net.imadz.monarch.StageError, snapshot: S): Unit = ()
+}
+
 object RunObserver {
   def nop[S]: RunObserver[S] = new RunObserver[S] {}
 }

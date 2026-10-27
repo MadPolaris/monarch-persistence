@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package net.imadz.monarch.persistence.proto;
+
+import "scalapb/scalapb.proto";
+option (scalapb.options) = { flat_package: true };
+
+// Field numbers and oneof alternatives are durable wire identities. Never reuse
+// a removed number; reserve it when changing the protocol.
+message RunStartedPO {
+  string run_id = 1;
+  repeated string stage_cursors = 2;
+  bytes initial_snapshot = 3;
+}
+message StageDonePO {
+  string cursor = 1;
+  int64 timestamp = 2;
+  map<string, string> metadata = 3;
+  bytes snapshot = 4;
+}
+message StageResolvedPO {
+  string cursor = 1;
+  int64 timestamp = 2;
+  optional string code = 3;
+  string error_code = 4;
+  string detail = 5;
+  bytes snapshot = 6;
+}
+message RunCompletedPO { string run_id = 1; }
+message RunFailedPO { string cursor = 1; string reason = 2; }
+message RunPlanExtendedPO { repeated string stage_cursors = 1; }
+
+message EventPO {
+  uint32 schema_version = 1;
+  oneof event {
+    RunStartedPO started = 2;
+    StageDonePO done = 3;
+    StageResolvedPO resolved = 4;
+    RunCompletedPO completed = 5;
+    RunFailedPO failed = 6;
+    RunPlanExtendedPO plan_extended = 7;
+  }
+}
+
+message ExecutingPO {
+  string run_id = 1;
+  repeated string completed_cursors = 2;
+  bytes last_snapshot = 3;
+}
+message DonePO { string run_id = 1; }
+message FailedPO { string run_id = 1; string cursor = 2; string reason = 3; }
+message IdlePO {}
+message RunStatePO {
+  oneof state {
+    IdlePO idle = 1;
+    ExecutingPO executing = 2;
+    DonePO done = 3;
+    FailedPO failed = 4;
+  }
+}
+message DurableStatePO {
+  uint32 schema_version = 1;
+  RunStatePO run = 2;
+  repeated string plan = 3;
+  optional string invalid = 4;
+  uint32 state_version = 5;
+}

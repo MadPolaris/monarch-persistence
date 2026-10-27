@@ -1,0 +1,4 @@
+33|net.imadz.monarch.persistence.PersistentMonarch$RunStarted|v2VydW5JZG5sZWdhY3ktZml4dHVyZWxzdGFnZUN1cnNvcnOfY2EjMGNiIzH/b2luaXRpYWxTbmFwc2hvdED/
+33|net.imadz.monarch.persistence.PersistentMonarch$StageDone|v2ZjdXJzb3JjYSMwaXRpbWVzdGFtcApobWV0YWRhdGG/aGFydGlmYWN0ZHJvb3T/aHNuYXBzaG90QWH/
+33|net.imadz.monarch.persistence.PersistentMonarch$RunCompleted|v2VydW5JZG5sZWdhY3ktZml4dHVyZf8=
+33|net.imadz.monarch.persistence.PersistentMonarch$RunFailedEvt|v2ZjdXJzb3JjYSMwZnJlYXNvbmdmYWlsdXJl/w==
