@@ -11,8 +11,9 @@ final class MonarchSerializer extends SerializerWithStringManifest {
   override val identifier: Int = 77102121
 
   override def manifest(value: AnyRef): String = value match {
+    case _: VersionedRunStarted | _: RunAwaiting => "E2"
     case _: Event => "E1"
-    case _: DurableState => "S1"
+    case _: DurableState => "S2"
     case _: RunState => "R1"
     case other => throw new IllegalArgumentException(s"unsupported Monarch value ${other.getClass.getName}")
   }
@@ -25,8 +26,14 @@ final class MonarchSerializer extends SerializerWithStringManifest {
   }
 
   override def fromBinary(bytes: Array[Byte], manifest: String): AnyRef = manifest match {
-    case "E1" => MonarchProtoConverters.eventFromProto(EventPO.parseFrom(bytes))
-    case "S1" => MonarchProtoConverters.snapshotFromProto(DurableStatePO.parseFrom(bytes))
+    case "E1" | "E2" =>
+      val proto = EventPO.parseFrom(bytes)
+      require(proto.schemaVersion == (if (manifest == "E1") 1 else 2), "event manifest/schema mismatch")
+      MonarchProtoConverters.eventFromProto(proto)
+    case "S1" | "S2" =>
+      val proto = DurableStatePO.parseFrom(bytes)
+      require(proto.schemaVersion == (if (manifest == "S1") 1 else 2), "snapshot manifest/schema mismatch")
+      MonarchProtoConverters.snapshotFromProto(proto)
     case "R1" => MonarchProtoConverters.stateFromProto(RunStatePO.parseFrom(bytes))
     case other => throw new IllegalArgumentException(s"unsupported Monarch manifest $other")
   }

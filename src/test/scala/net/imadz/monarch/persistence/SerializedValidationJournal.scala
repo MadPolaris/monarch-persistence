@@ -49,6 +49,8 @@ object SerializedValidationJournal {
     serialized-validation-journal.delay = 0ms
     serialized-validation-journal.directory = ""
     serialized-validation-journal.hold-cursor = ""
+    serialized-validation-journal.hold-event = ""
+    serialized-validation-journal.hold-id = ""
     serialized-validation-journal.force-before-hold = false
     akka.persistence.snapshot-store.plugin = "validation-snapshot-store"
     validation-snapshot-store.class = "net.imadz.monarch.persistence.ValidationSnapshotStore"
@@ -112,6 +114,8 @@ class SerializedValidationJournal extends AsyncWriteJournal {
   private val delay = settings.getDuration("delay").toNanos.nanos
   private val directory = Option(settings.getString("directory")).filter(_.nonEmpty).map(Paths.get(_))
   private val heldCursor = settings.getString("hold-cursor")
+  private val heldEvent = settings.getString("hold-event")
+  private val heldId = settings.getString("hold-id")
   private val forceBeforeHold = settings.getBoolean("force-before-hold")
   directory.foreach(Files.createDirectories(_))
 
@@ -161,14 +165,17 @@ class SerializedValidationJournal extends AsyncWriteJournal {
         } catch { case scala.util.control.NonFatal(ex) => promise.tryFailure(ex) }
         ()
       }
-      val held = events.exists { e => e.payload match {
+      val heldByCursor = heldCursor.nonEmpty && events.exists { e => e.payload match {
         case done: StageDone => done.cursor == heldCursor
         case resolved: StageResolved => resolved.cursor == heldCursor
         case _ => false
       }}
+      val heldByEvent = heldEvent.nonEmpty && events.exists(_.payload.getClass.getSimpleName == heldEvent)
+      val held = (heldId.isEmpty || heldId == atomic.persistenceId) && (heldByCursor || heldByEvent)
       if (held) {
         if (forceBeforeHold) persist()
-        forceMarkers.get(atomic.persistenceId).foreach(_(s"HELD $heldCursor forced=$forceBeforeHold"))
+        val label = if (heldByCursor) heldCursor else heldEvent
+        forceMarkers.get(atomic.persistenceId).foreach(_(s"HELD $label forced=$forceBeforeHold"))
       } else gates.get(atomic.persistenceId) match {
         case Some(probe) => probe ! Pending(events, () => release(), ex => {
           if (checkpoint) m.pending.decrementAndGet()

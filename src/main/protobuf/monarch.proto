@@ -29,6 +29,24 @@ message StageResolvedPO {
 message RunCompletedPO { string run_id = 1; }
 message RunFailedPO { string cursor = 1; string reason = 2; }
 message RunPlanExtendedPO { repeated string stage_cursors = 1; }
+message RunIdentityPO {
+  string run_id = 1;
+  string definition_id = 2;
+  string definition_version = 3;
+  string codec_version = 4;
+  string initial_digest = 5;
+  string plan_digest = 6;
+}
+message AwaitingRefPO {
+  string cursor = 1;
+  string operation_key = 2;
+  string request_digest = 3;
+}
+message VersionedRunStartedPO {
+  RunIdentityPO identity = 1;
+  repeated string stage_cursors = 2;
+  bytes initial_snapshot = 3;
+}
 
 message EventPO {
   uint32 schema_version = 1;
@@ -39,6 +57,8 @@ message EventPO {
     RunCompletedPO completed = 5;
     RunFailedPO failed = 6;
     RunPlanExtendedPO plan_extended = 7;
+    VersionedRunStartedPO versioned_started = 8;
+    AwaitingRefPO awaiting = 9;
   }
 }
 
@@ -64,4 +84,39 @@ message DurableStatePO {
   repeated string plan = 3;
   optional string invalid = 4;
   uint32 state_version = 5;
+  RunIdentityPO identity = 6;
+  optional bytes retained_snapshot = 7;
+  repeated string completed_cursors = 8;
+  AwaitingRefPO awaiting = 9;
+}
+
+message StartOrAttachPO {
+  string run_id = 1;
+  string definition_id = 2;
+  string definition_version = 3;
+  string codec_version = 4;
+  bytes initial_state = 5;
+  string reply_to = 6;
+}
+message GetRunPO { string reply_to = 1; }
+message RunViewPO {
+  optional string run_id = 1;
+  string status = 2;
+  repeated string completed_cursors = 3;
+  optional bytes last_state = 4;
+  RunIdentityPO identity = 5;
+  AwaitingRefPO awaiting = 6;
+  optional string reason = 7;
+}
+message RunRejectedPO { string run_id = 1; string reason = 2; }
+message RunUnavailablePO { optional string run_id = 1; string reason = 2; }
+message RunWirePO {
+  uint32 schema_version = 1;
+  oneof value {
+    StartOrAttachPO start = 2;
+    GetRunPO get = 3;
+    RunViewPO current = 4;
+    RunRejectedPO rejected = 5;
+    RunUnavailablePO unavailable = 6;
+  }
 }

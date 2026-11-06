@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package net.imadz.monarch.persistence.operation.proto;
+
+import "scalapb/scalapb.proto";
+option (scalapb.options) = { flat_package: true };
+
+// These field numbers, alternatives and enum values are durable identities.
+// Reserve removed numbers; never reuse them. All envelopes require schema 1.
+message OperationRequestPO {
+  string operation_key = 1;
+  string effect_key = 2;
+  string step_id = 3;
+  string connector_id = 4;
+  string connector_version = 5;
+  string ledger_epoch = 6;
+  bytes payload = 7;
+  optional string reservation_id = 8;
+}
+message OperationEvidencePO {
+  string operation_key = 1;
+  string request_digest = 2;
+  string ledger_epoch = 3;
+  optional string task_id = 4;
+  bytes payload = 5;
+}
+message OperationSucceededPO {
+  bytes result = 1;
+  OperationEvidencePO evidence = 2;
+}
+message OperationKnownFailedPO {
+  string code = 1;
+  string detail = 2;
+  bytes result = 3;
+  OperationEvidencePO evidence = 4;
+}
+message OperationTerminalPO {
+  oneof terminal {
+    OperationSucceededPO succeeded = 1;
+    OperationKnownFailedPO failed = 2;
+  }
+}
+message OperationPolicyPO {
+  int64 io_timeout_millis = 1;
+  int64 check_interval_millis = 2;
+  uint32 max_checks = 3;
+  uint32 manual_check_budget = 4;
+  uint32 max_reconciliations = 5;
+  uint32 max_submissions = 6;
+}
+
+enum OperationPhasePO {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_EMPTY = 1;
+  PHASE_PREPARED = 2;
+  PHASE_DISPATCHING = 3;
+  PHASE_ONGOING = 4;
+  PHASE_RECONCILING = 5;
+  PHASE_BLOCKED = 6;
+  PHASE_SUCCEEDED = 7;
+  PHASE_FAILED = 8;
+  PHASE_RECOVERY_BLOCKED = 9;
+}
+
+message OperationPreparedPO {
+  OperationRequestPO request = 1;
+  string request_digest = 2;
+  OperationPolicyPO policy = 3;
+}
+message OperationDispatchStartedPO {
+  uint32 submission = 1;
+  OperationEvidencePO authorization = 2;
+}
+message OperationQueryStartedPO { uint32 check = 1; }
+message OperationRunningObservedPO {
+  OperationEvidencePO evidence = 1;
+  optional int64 next_check_at = 2;
+}
+message OperationUnknownObservedPO {
+  string reason = 1;
+  optional int64 next_check_at = 2;
+}
+message OperationBlockedPO { string reason = 1; }
+message OperationReconciledPO {
+  uint32 round = 1;
+  uint32 allowance = 2;
+  int64 next_check_at = 3;
+}
+message OperationTerminalRecordedPO { OperationTerminalPO terminal = 1; }
+message OperationEventPO {
+  uint32 schema_version = 1;
+  oneof event {
+    OperationPreparedPO prepared = 2;
+    OperationDispatchStartedPO dispatch_started = 3;
+    OperationQueryStartedPO query_started = 4;
+    OperationRunningObservedPO running_observed = 5;
+    OperationUnknownObservedPO unknown_observed = 6;
+    OperationBlockedPO blocked = 7;
+    OperationReconciledPO reconciled = 8;
+    OperationTerminalRecordedPO terminal_recorded = 9;
+  }
+}
+
+message OperationStatePO {
+  uint32 schema_version = 1;
+  uint32 state_version = 2;
+  OperationRequestPO request = 3;
+  optional string request_digest = 4;
+  OperationPolicyPO policy = 5;
+  OperationPhasePO phase = 6;
+  OperationEvidencePO evidence = 7;
+  OperationTerminalPO terminal = 8;
+  optional string reason = 9;
+  optional int64 next_check_at = 10;
+  uint32 checks = 11;
+  uint32 remaining_checks = 12;
+  uint32 submissions = 13;
+  uint32 reconciliations = 14;
+  optional string invalid = 15;
+}
+
+message OperationViewPO {
+  string operation_key = 1;
+  optional string request_digest = 2;
+  OperationPhasePO phase = 3;
+  OperationTerminalPO terminal = 4;
+  optional string reason = 5;
+  optional int64 next_check_at = 6;
+  uint32 checks = 7;
+}
+message OperationEnsurePO {
+  OperationRequestPO request = 1;
+  string reply_to = 2;
+}
+message OperationGetPO {
+  string operation_key = 1;
+  string reply_to = 2;
+}
+message OperationReconcilePO {
+  string operation_key = 1;
+  string reply_to = 2;
+}
+message OperationCurrentPO { OperationViewPO view = 1; }
+message OperationRejectedPO {
+  string operation_key = 1;
+  string reason = 2;
+}
+message OperationWirePO {
+  uint32 schema_version = 1;
+  oneof message {
+    OperationEnsurePO ensure = 2;
+    OperationGetPO get = 3;
+    OperationReconcilePO reconcile = 4;
+    OperationCurrentPO current = 5;
+    OperationRejectedPO rejected = 6;
+  }
+}

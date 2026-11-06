@@ -4,6 +4,28 @@ ThisBuild / organizationHomepage := Some(url("https://github.com/MadPolaris"))
 ThisBuild / scalaVersion := "2.13.14"
 ThisBuild / versionScheme := Some("early-semver")
 
+lazy val root = (project in file(".")).settings(name := "monarch-persistence")
+
+// Deliberately resolves the public candidate artifact, not dependsOn(root) or test classes.
+// The three explicit sources are standalone fixture/consumer entrypoints, not library code.
+lazy val examples = (project in file("examples")).settings(
+  name := "monarch-recoverable-examples",
+  publish / skip := true,
+  mimaPreviousArtifacts := Set.empty,
+  Compile / scalacOptions ++= Seq("-target:11", "-deprecation", "-feature", "-unchecked", "-Xlint"),
+  Compile / run / fork := true,
+  Compile / unmanagedSources ++= {
+    val fixtures = baseDirectory.value.getParentFile / "src" / "test" / "scala" / "net" / "imadz" / "monarch" / "persistence"
+    Seq("ExternalTaskServiceFixture.scala", "SerializedValidationJournal.scala", "ManagedOperationJvmHost.scala").map(fixtures / _)
+  },
+  resolvers ++= sys.props.get("monarch.example.repository").toSeq.map("monarch-r1-example" at _),
+  resolvers ++= sys.props.get("monarch.core.repository").toSeq.map("monarch-core-example" at _),
+  libraryDependencies ++= Seq(
+    "net.imadz" %% "monarch-persistence" % sys.props.getOrElse("monarch.example.version", "0.3.0-dev.unpublished"),
+    "ch.qos.logback" % "logback-classic" % "1.2.13"
+  )
+)
+
 licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0"))
 Compile / packageBin / mappings += baseDirectory.value / "LICENSE" -> "META-INF/LICENSE"
 Compile / packageSrc / mappings += baseDirectory.value / "LICENSE" -> "META-INF/LICENSE"
