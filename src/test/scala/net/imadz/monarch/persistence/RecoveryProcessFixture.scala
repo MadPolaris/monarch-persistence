@@ -31,13 +31,14 @@ private[persistence] object RecoveryProcessFixture {
 
   final class Child private[RecoveryProcessFixture] (val process: Process, directory: Path, label: String) {
     val transcript = new CopyOnWriteArrayList[String]()
+    private val stopping = new java.util.concurrent.atomic.AtomicBoolean(false)
     private val lines = new LinkedBlockingQueue[String]()
     private val reader = new Thread(() => {
       val input = new BufferedReader(new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
       val output = Files.newBufferedWriter(directory.resolve(s"$label-${process.pid()}.log"), StandardCharsets.UTF_8,
         StandardOpenOption.CREATE_NEW)
       def nextLine(): String = try input.readLine() catch {
-        case _: java.io.IOException if !process.isAlive => null // Process.destroyForcibly may close the read pipe.
+        case _: java.io.IOException if stopping.get() || !process.isAlive => null // destroyForcibly can close the pipe before exit is visible.
       }
       try {
         var line = nextLine()
@@ -69,6 +70,7 @@ private[persistence] object RecoveryProcessFixture {
     }
 
     def stop(): Unit = {
+      stopping.set(true)
       val forced = process.isAlive
       if (forced) process.destroyForcibly()
       require(process.waitFor(10, TimeUnit.SECONDS), s"$label did not stop")

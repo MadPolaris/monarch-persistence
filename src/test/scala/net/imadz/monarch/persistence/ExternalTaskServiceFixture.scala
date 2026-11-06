@@ -6,7 +6,7 @@ import java.nio.{ByteBuffer, CharBuffer}
 import java.nio.channels.{FileChannel, FileLock}
 import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
 import java.nio.file.{Files, LinkOption, Path, Paths, StandardOpenOption}
-import java.util.Arrays
+import java.util.{Arrays, Base64}
 import java.util.zip.CRC32
 
 import scala.collection.mutable
@@ -30,6 +30,13 @@ import scala.util.control.NonFatal
   *   COMPLETE [operationKey]
   *     -> [SUCCEEDED, taskId, ledgerEpoch, result] or [NOT_FOUND, actualLedgerEpoch]
   *   COUNT [] -> [COUNT, uniqueCompletedEffects, acceptedTasks, submitCalls, queryCalls]
+  *   BUSINESS [] -> [BUSINESS, bankCreditsCount, bankPurchasesCount, totalBalance, totalHoldings,
+  *                   fabFinalAcceptedCount, fabUnloadedCount, duplicateEffects]
+  *   TASKS [] -> [TASKS, runningOperationKey, ...] (sorted; at most 15 fields including status)
+  *   ITEMS [] -> [ITEMS, bankItems, fabItems], sorted by decoded item ID within each domain:
+  *     bankItems = comma-separated <base64url-itemId>~<balance>~<holding>
+  *     fabItems  = comma-separated <base64url-itemId>~<location>~<phase>
+  *     An empty domain has an empty string. Oversized diagnostic replies are REJECTED.
   *   EPOCH [] -> [EPOCH, actualLedgerEpoch]
   *   FORGET [] -> [EPOCH, newLedgerEpoch]
   *   CHECK [] -> [CHECK, actualLedgerEpoch, acceptedTasks, runningTasks, succeededTasks,
@@ -38,20 +45,38 @@ import scala.util.control.NonFatal
   *
   * A rejection is [REJECTED, reason]. Reasons are INVALID_FIELDS, UNKNOWN_COMMAND,
   * UNSUPPORTED_KIND, EMPTY_IDENTITY_FIELD, IMMUTABLE_FIELDS_CHANGED, LEDGER_EPOCH_MISMATCH,
-  * OPERATION_HISTORY_UNAVAILABLE, EFFECT_KEY_CONFLICT, FRAME_LIMIT_EXCEEDED, or
-  * OWNERSHIP_MARKER_REQUIRED. Malformed wire frames are closed without a response.
+  * OPERATION_HISTORY_UNAVAILABLE, EFFECT_KEY_CONFLICT, FRAME_LIMIT_EXCEEDED,
+  * OWNERSHIP_MARKER_REQUIRED, INVALID_BUSINESS_PAYLOAD, BUSINESS_KIND_MISMATCH,
+  * BUSINESS_ORDER_VIOLATION, or BUSINESS_DUPLICATE_EXECUTION. Malformed wire frames are closed
+  * without a response. A rejected COMPLETE leaves the original accepted task RUNNING.
   *
-  * kind is exactly "bank" (a CREDIT effect) or "fab" (a PROCESS effect). Payloads are opaque
-  * strings, including empty strings; no amount/equipment parser or external integration is involved.
-  * Operation keys, digests, and effect keys must be nonempty. All six SUBMIT fields are immutable.
-  * Results are exactly "bank-receipt:<operationKey>" or "fab-measurement:<operationKey>".
+  * kind is exactly "bank" or "fab". Except for the opt-in WF2: prefix, payloads remain opaque
+  * strings, including empty strings, and results remain exactly "bank-receipt:<operationKey>" or
+  * "fab-measurement:<operationKey>". Operation keys, digests, and effect keys must be nonempty.
+  * All six SUBMIT fields are immutable.
+  *
+  * WF2:<area>:<base64url-UTF8-itemId>~<executionNumber>,... contains 1..100 unique, nonempty IDs
+  * and execution numbers 0..32. Canonical URL-safe base64 with or without padding is accepted;
+  * results/snapshots always use unpadded base64url. Areas recharge/purchase require kind bank;
+  * transport-in/litho/transport-out/measure/rework/unload require kind fab. COMPLETE derives
+  * WR2:<area>:<base64url-itemId>~<SUCCESS|RETRY|REWORK>,... in request item order. The oracle, not
+  * the host or batch codec, chooses each classification using its own durable per-item history.
+  * Recharge of an ID ending in 1 at execution 0 is RETRY without credit; other valid recharges
+  * credit exactly 100 once. Purchase requires that credit, debits 100 and adds a holding of 100
+  * once. Fab follows stocker -> litho -> processed -> metrology -> measurement -> unload/stocker.
+  * First measure of an ID ending in 1 at execution 0 yields REWORK, requiring rework before a
+  * successful remeasurement; otherwise measurement succeeds. No port-capacity simulation is done.
+  * Reusing a completed item execution in another task is rejected, not counted as a fresh effect.
+  * A batch is all-or-nothing: any invalid item prevents its entire completion from being appended.
   * A durable acceptance assigns task-1, task-2, ...; the ordinal never resets, even across FORGET.
   * Only QUERY appends the original stored operation key and digest. Duplicate SUBMIT/COMPLETE
   * returns stored evidence without appending another acceptance/completion.
   *
   * acceptedTasks/runningTasks/succeededTasks describe the current epoch's visible task history.
-  * uniqueCompletedEffects counts the independent business-effect ledger across ALL epochs.
-  * These counts are reconstructed from durable records. submitCalls/queryCalls are explicitly
+  * uniqueCompletedEffects retains its original meaning: completed physical task/effect keys across
+  * ALL epochs, including WF2 tasks whose result contains RETRY. BUSINESS instead counts per-item
+  * domain effects, excluding RETRY from credits, and includes effects of forgotten tasks. These
+  * counts are reconstructed from durable records. submitCalls/queryCalls are explicitly
   * process-local diagnostics (including rejected calls), reset on service restart. CHECK describes
   * only this service's ledger, never whether the host recovered correctly or may safely resend.
   *
@@ -79,8 +104,11 @@ import scala.util.control.NonFatal
   *   [ACCEPT, kind, operationKey, requestDigest, epoch, effectKey, businessPayload, taskId]
   *   [COMPLETED, operationKey, taskId, epoch, effectKey, result]
   * Each append is force(true)'d before publication/reply. A single COMPLETED event is both task
-  * history and the business effect itself, not a callback counter. Replay only rebuilds state;
-  * it neither appends completions nor emits EXTERNAL_EFFECT. Incomplete trailing records alone
+  * history and the business effect itself, not a callback counter. For WF2, replay validates the
+  * stored structured result against the accepted request and prior domain state, then reconstructs
+  * all wallets, holdings, FOUP locations and per-item execution evidence from that one record.
+  * Replay only rebuilds state; it neither appends completions nor emits EXTERNAL_EFFECT. Incomplete
+  * trailing records alone
   * are truncated and forced on startup; complete frames with bad checksums/schema fail startup.
   * A lifetime exclusive WAL lock prevents two services from using the same owned directory.
   */
@@ -240,12 +268,182 @@ object ExternalTaskServiceFixture {
     def submitFields: Vector[String] =
       Vector(kind, operationKey, requestDigest, ledgerEpoch, effectKey, businessPayload)
     def acceptance: Vector[String] = Vector("ACCEPT") ++ submitFields :+ taskId
-    def result: String =
-      if (kind == "bank") s"bank-receipt:$operationKey" else s"fab-measurement:$operationKey"
-    def completion: Vector[String] =
+    def completion(result: String): Vector[String] =
       Vector("COMPLETED", operationKey, taskId, ledgerEpoch, effectKey, result)
-    def completedQuery: Vector[String] =
+    def completedQuery(result: String): Vector[String] =
       Vector("SUCCEEDED", taskId, ledgerEpoch, result, operationKey, requestDigest)
+  }
+
+  private val BankAreas = Set("recharge", "purchase")
+  private val FabAreas = Set("transport-in", "litho", "transport-out", "measure", "rework", "unload")
+  private val ItemEncoder = Base64.getUrlEncoder.withoutPadding()
+
+  private final case class WorkflowItem(id: String, encodedId: String, executionNumber: Int)
+  private final case class WorkflowPayload(area: String, items: Vector[WorkflowItem]) {
+    def result(classifications: Vector[String]): String =
+      s"WR2:$area:" + items.zip(classifications).map { case (item, classification) =>
+        s"${item.encodedId}~$classification"
+      }.mkString(",")
+
+    // SUCCESS is longer than RETRY or REWORK, so this bounds every possible future reply.
+    def largestResult: String = result(Vector.fill(items.size)("SUCCESS"))
+  }
+
+  private def parseWorkflow(kind: String, payload: String): Either[String, Option[WorkflowPayload]] = {
+    if (!payload.startsWith("WF2:")) return Right(None)
+    val parts = payload.split(":", -1)
+    if (parts.length != 3 || (!BankAreas.contains(parts(1)) && !FabAreas.contains(parts(1))))
+      return Left("INVALID_BUSINESS_PAYLOAD")
+    val area = parts(1)
+    if ((BankAreas.contains(area) && kind != "bank") || (FabAreas.contains(area) && kind != "fab"))
+      return Left("BUSINESS_KIND_MISMATCH")
+    val entries = parts(2).split(",", -1).toVector
+    if (entries.size > 100) return Left("INVALID_BUSINESS_PAYLOAD")
+    try {
+      val items = entries.map { entry =>
+        val fields = entry.split("~", -1)
+        require(fields.length == 2 && fields(0).nonEmpty, "invalid item shape")
+        val bytes = Base64.getUrlDecoder.decode(fields(0))
+        val encodedId = ItemEncoder.encodeToString(bytes)
+        require(fields(0) == encodedId || fields(0) == Base64.getUrlEncoder.encodeToString(bytes),
+          "noncanonical base64url item ID")
+        val id = StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(bytes)).toString
+        require(id.nonEmpty, "empty item ID")
+        require(fields(1).nonEmpty && fields(1).forall(c => c >= '0' && c <= '9'),
+          "invalid execution number")
+        val execution = fields(1).toInt
+        require(execution >= 0 && execution <= 32, "execution number out of range")
+        WorkflowItem(id, encodedId, execution)
+      }
+      if (items.map(_.id).distinct.size != items.size) Left("INVALID_BUSINESS_PAYLOAD")
+      else Right(Some(WorkflowPayload(area, items)))
+    } catch {
+      case _: IllegalArgumentException => Left("INVALID_BUSINESS_PAYLOAD")
+      case _: CharacterCodingException => Left("INVALID_BUSINESS_PAYLOAD")
+    }
+  }
+
+  private final case class ItemEvidence(
+      area: String, executionNumber: Int, classification: String,
+      operationKey: String, taskId: String, ledgerEpoch: String, effectKey: String)
+
+  private final case class BankAccount(
+      balance: Long = 0L, holding: Long = 0L, history: Vector[ItemEvidence] = Vector.empty) {
+    def credited: Boolean = history.exists(e => e.area == "recharge" && e.classification == "SUCCESS")
+    def purchased: Boolean = history.exists(e => e.area == "purchase" && e.classification == "SUCCESS")
+  }
+
+  private final case class FabItem(
+      location: String = "stocker", phase: String = "stocker", history: Vector[ItemEvidence] = Vector.empty) {
+    def accepted: Boolean = history.exists(e => e.area == "measure" && e.classification == "SUCCESS")
+    def unloaded: Boolean = history.exists(e => e.area == "unload" && e.classification == "SUCCESS")
+  }
+
+  private final case class BusinessState(
+      bank: Map[String, BankAccount] = Map.empty, fab: Map[String, FabItem] = Map.empty) {
+    def summary: Vector[String] = {
+      // Count actual repeated domain effects, not repeated COMPLETE calls or physical batch keys.
+      // A REWORK measurement and its later SUCCESS are distinct, legitimate measurement effects.
+      val histories = bank.valuesIterator.map(_.history) ++ fab.valuesIterator.map(_.history)
+      val duplicates = histories.map { history =>
+        history.filterNot(_.classification == "RETRY")
+          .groupBy(e => (e.area, e.classification)).valuesIterator
+          .map(events => math.max(0, events.size - 1).toLong).sum
+      }.sum
+      Vector("BUSINESS", bank.valuesIterator.count(_.credited).toString,
+        bank.valuesIterator.count(_.purchased).toString, bank.valuesIterator.map(_.balance).sum.toString,
+        bank.valuesIterator.map(_.holding).sum.toString, fab.valuesIterator.count(_.accepted).toString,
+        fab.valuesIterator.count(_.unloaded).toString, duplicates.toString)
+    }
+
+    def items: Vector[String] = {
+      def encoded(id: String): String = ItemEncoder.encodeToString(id.getBytes(StandardCharsets.UTF_8))
+      val bankItems = bank.toVector.sortBy(_._1).map { case (id, account) =>
+        s"${encoded(id)}~${account.balance}~${account.holding}"
+      }.mkString(",")
+      val fabItems = fab.toVector.sortBy(_._1).map { case (id, item) =>
+        s"${encoded(id)}~${item.location}~${item.phase}"
+      }.mkString(",")
+      Vector("ITEMS", bankItems, fabItems)
+    }
+  }
+
+  private final case class PredictedCompletion(result: String, state: BusinessState)
+
+  private def opaqueResult(task: AcceptedTask): String =
+    if (task.kind == "bank") s"bank-receipt:${task.operationKey}" else s"fab-measurement:${task.operationKey}"
+
+  // Pure interpretation: no product codec/state, I/O, effect-key-based item identity, or ledger mutation.
+  private def predictResult(task: AcceptedTask, state: BusinessState): Either[String, PredictedCompletion] =
+    parseWorkflow(task.kind, task.businessPayload).flatMap {
+      case None => Right(PredictedCompletion(opaqueResult(task), state))
+      case Some(workflow) =>
+        workflow.items.foldLeft[Either[String, (Vector[String], BusinessState)]](
+          Right((Vector.empty[String], state))) { (accumulated, item) =>
+          accumulated.flatMap { case (classifications, prior) =>
+            interpretItem(task, workflow.area, item, prior).map { case (classification, next) =>
+              (classifications :+ classification, next)
+            }
+          }
+        }.map { case (classifications, next) =>
+          PredictedCompletion(workflow.result(classifications), next)
+        }
+    }
+
+  private def interpretItem(task: AcceptedTask, area: String, item: WorkflowItem,
+      state: BusinessState): Either[String, (String, BusinessState)] = {
+    def evidence(classification: String): ItemEvidence =
+      ItemEvidence(area, item.executionNumber, classification, task.operationKey, task.taskId,
+        task.ledgerEpoch, task.effectKey)
+    def alreadyExecuted(history: Vector[ItemEvidence]): Boolean =
+      history.exists(e => e.area == area && e.executionNumber == item.executionNumber)
+
+    if (BankAreas.contains(area)) {
+      val account = state.bank.getOrElse(item.id, BankAccount())
+      if (alreadyExecuted(account.history)) return Left("BUSINESS_DUPLICATE_EXECUTION")
+      val transition: Either[String, (String, BankAccount)] = area match {
+        case "recharge" if account.credited => Left("BUSINESS_DUPLICATE_EXECUTION")
+        case "recharge" if item.id.endsWith("1") && item.executionNumber == 0 => Right(("RETRY", account))
+        case "recharge" => Right(("SUCCESS", account.copy(balance = 100L)))
+        case "purchase" if account.purchased => Left("BUSINESS_DUPLICATE_EXECUTION")
+        case "purchase" if account.credited && account.balance == 100L && account.holding == 0L =>
+          Right(("SUCCESS", account.copy(balance = 0L, holding = 100L)))
+        case _ => Left("BUSINESS_ORDER_VIOLATION")
+      }
+      transition.map { case (classification, next) =>
+        val recorded = next.copy(history = account.history :+ evidence(classification))
+        (classification, state.copy(bank = state.bank.updated(item.id, recorded)))
+      }
+    } else {
+      val foup = state.fab.getOrElse(item.id, FabItem())
+      if (alreadyExecuted(foup.history) || (area != "measure" && foup.history.exists(_.area == area)))
+        return Left("BUSINESS_DUPLICATE_EXECUTION")
+      val transition: Either[String, (String, FabItem)] = area match {
+        case "transport-in" if foup.location == "stocker" && foup.phase == "stocker" =>
+          Right(("SUCCESS", foup.copy(location = "litho", phase = "imported")))
+        case "litho" if foup.location == "litho" && foup.phase == "imported" =>
+          Right(("SUCCESS", foup.copy(phase = "processed")))
+        case "transport-out" if foup.location == "litho" && foup.phase == "processed" =>
+          Right(("SUCCESS", foup.copy(location = "metrology", phase = "awaiting-measurement")))
+        case "measure" if foup.location == "metrology" &&
+            (foup.phase == "awaiting-measurement" || foup.phase == "reworked") =>
+          if (foup.phase == "awaiting-measurement" && item.id.endsWith("1") && item.executionNumber == 0)
+            Right(("REWORK", foup.copy(phase = "measurement-rework")))
+          else Right(("SUCCESS", foup.copy(phase = "accepted")))
+        case "rework" if foup.location == "metrology" && foup.phase == "measurement-rework" =>
+          Right(("SUCCESS", foup.copy(phase = "reworked")))
+        case "unload" if foup.location == "metrology" && foup.phase == "accepted" =>
+          Right(("SUCCESS", foup.copy(location = "stocker", phase = "unloaded")))
+        case _ => Left("BUSINESS_ORDER_VIOLATION")
+      }
+      transition.map { case (classification, next) =>
+        val recorded = next.copy(history = foup.history :+ evidence(classification))
+        (classification, state.copy(fab = state.fab.updated(item.id, recorded)))
+      }
+    }
   }
 
   private final case class CompletedEffect(
@@ -259,6 +457,7 @@ object ExternalTaskServiceFixture {
     private val retiredKeys = mutable.HashSet.empty[String]
     private val reservedEffects = mutable.HashSet.empty[String]
     private val completedEffects = mutable.HashMap.empty[String, CompletedEffect]
+    private var businessState = BusinessState()
     private var submitCalls = 0L
     private var queryCalls = 0L
     private var dropNextSubmitReply = false
@@ -292,6 +491,18 @@ object ExternalTaskServiceFixture {
           if (fields.nonEmpty) rejected("INVALID_FIELDS")
           else Vector("COUNT", completedEffects.size.toString, tasks.size.toString,
             submitCalls.toString, queryCalls.toString)
+        case "BUSINESS" =>
+          if (fields.nonEmpty) rejected("INVALID_FIELDS") else businessState.summary
+        case "ITEMS" =>
+          if (fields.nonEmpty) rejected("INVALID_FIELDS") else boundedReply(businessState.items)
+        case "TASKS" =>
+          if (fields.nonEmpty) rejected("INVALID_FIELDS")
+          else {
+            val running = tasks.valuesIterator.filterNot(task => completedEffects.contains(task.effectKey))
+              .map(_.operationKey).toVector.sorted
+            if (running.size + 1 > 15) rejected("FRAME_LIMIT_EXCEEDED")
+            else boundedReply("TASKS" +: running)
+          }
         case "EPOCH" =>
           if (fields.nonEmpty) rejected("INVALID_FIELDS") else Vector("EPOCH", epoch)
         case "FORGET" =>
@@ -338,8 +549,12 @@ object ExternalTaskServiceFixture {
 
           val task = AcceptedTask(fields(0), fields(1), fields(2), fields(3), fields(4), fields(5),
             s"task-${Math.addExact(taskNumber, 1L)}")
-          try ensureTaskFits(task)
+          val preflight = try ensureTaskFits(task)
           catch { case _: FrameException => return rejected("FRAME_LIMIT_EXCEEDED") }
+          preflight match {
+            case Left(reason) => return rejected(reason)
+            case Right(_) => ()
+          }
           append(task.acceptance)
           status(task, evidence = false)
       }
@@ -350,7 +565,11 @@ object ExternalTaskServiceFixture {
         case None => notFound
         case Some(task) =>
           if (!completedEffects.contains(task.effectKey)) {
-            append(task.completion)
+            val predicted = predictResult(task, businessState) match {
+              case Left(reason) => return rejected(reason)
+              case Right(value) => value
+            }
+            append(task.completion(predicted.result))
             diagnostic(s"EXTERNAL_EFFECT $operationKey")
           }
           status(task, evidence = false)
@@ -365,12 +584,29 @@ object ExternalTaskServiceFixture {
       if (evidence) fields ++ Vector(task.operationKey, task.requestDigest) else fields
     }
 
-    private def ensureTaskFits(task: AcceptedTask): Unit = {
-      encodeBody(task.acceptance)
-      encodeBody(task.completion)
-      encodeBody(task.completedQuery)
-      ()
+    private def boundedReply(fields: Vector[String]): Vector[String] = {
+      try {
+        encodeBody(fields)
+        fields
+      } catch { case _: FrameException => rejected("FRAME_LIMIT_EXCEEDED") }
     }
+
+    private def ensureTaskFits(task: AcceptedTask): Either[String, Unit] =
+      parseWorkflow(task.kind, task.businessPayload).map { workflow =>
+        val largestResult = workflow.map(_.largestResult).getOrElse(opaqueResult(task))
+        encodeBody(task.acceptance)
+        encodeBody(task.completion(largestResult))
+        encodeBody(task.completedQuery(largestResult))
+        ()
+      }
+
+    private def validateResult(task: AcceptedTask, result: String, state: BusinessState): BusinessState =
+      predictResult(task, state) match {
+        case Left(reason) => throw new IOException(s"Invalid external fixture WAL business transition: $reason")
+        case Right(predicted) =>
+          requireRecord(predicted.result == result, "completion result mismatch")
+          predicted.state
+      }
 
     // The only state transition routine. It performs no I/O, logging, or external callbacks.
     private def applyRecord(record: Vector[String]): Unit = record match {
@@ -389,17 +625,21 @@ object ExternalTaskServiceFixture {
         requireRecord(!tasks.contains(key) && !retiredKeys.contains(key), "reused operation key")
         requireRecord(!reservedEffects.contains(effectKey), "reused effect key")
         val task = AcceptedTask(kind, key, digest, storedEpoch, effectKey, payload, taskId)
-        ensureTaskFits(task)
+        ensureTaskFits(task) match {
+          case Left(reason) => throw new IOException(s"Invalid external fixture WAL business payload: $reason")
+          case Right(_) => ()
+        }
         tasks.put(key, task)
         reservedEffects.add(effectKey)
         taskNumber = next
       case Vector("COMPLETED", key, taskId, storedEpoch, effectKey, result) =>
         val task = tasks.getOrElse(key, throw new IOException("Completion without visible acceptance"))
         requireRecord(task.taskId == taskId && task.ledgerEpoch == storedEpoch &&
-          task.effectKey == effectKey && task.result == result, "completion evidence mismatch")
+          task.effectKey == effectKey, "completion evidence mismatch")
         requireRecord(!completedEffects.contains(effectKey), "duplicate completed effect event")
+        val nextBusinessState = validateResult(task, result, businessState)
         completedEffects.put(effectKey, CompletedEffect(key, taskId, storedEpoch, result))
-        ()
+        businessState = nextBusinessState
       case _ => throw new IOException("Unknown external fixture WAL record")
     }
 

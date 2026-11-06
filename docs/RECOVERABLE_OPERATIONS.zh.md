@@ -75,8 +75,8 @@ RunAwaiting 提交
 - definition、codec、连接器版本或冻结计划不兼容时，保持可诊断的 `RecoveryBlocked`。
 - ProtocolLimits 限定 request/state/result/evidence/envelope、字符串、计划和 metadata；R1 可下调，不可超过 wire 上限。大文件另存可靠不可变 artifact，并在业务 bytes 中携带摘要/长度/引用；库不保证一个本地路径在重启后仍存在。
 
-## 6. 本轮不包含的能力
+## 6. 与 R2 的关系
 
-尚未实现：资源 reservation/物理占用转交、durable inbox/跨区交付、BatchCoordinator、逐项 subset retry、业务排空、银行/Fab 页面迁移。它们是 G2–G4，不可因为 R1 可以恢复单次操作便宣称完整银行批业务或 Fab 跨区流程已打通。
+R1 本身只提供可恢复步骤。后续 R2 在同一 artifact 中增加资源 reservation/占位转交、耐久 inbox、BatchCoordinator、逐项 subset retry 与业务排空，见 [DURABLE_WORKFLOWS.zh.md](DURABLE_WORKFLOWS.zh.md)。完整样本的验收与所用制品单独记录，不能用本 R1 的测试替代 R2 验收。
 
 运行前提：可靠 journal、同实体单有效 owner、外部幂等或权威查证契约。测试的 JVM kill/`force(true)` 不代表物理断电、生产 journal、脑裂或真实设备认证。observer 仅用于展示/诊断，不承载唯一业务副作用。

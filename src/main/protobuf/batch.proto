@@ -1,0 +1,277 @@
+syntax = "proto3";
+package net.imadz.monarch.persistence.batch.proto;
+import "scalapb/scalapb.proto";
+option (scalapb.options) = { flat_package: true };
+
+// Schema 1. Numbers and alternatives are durable identities; never reuse them.
+// Maps use repeated entries so duplicate keys can be rejected before materialization.
+message BatchIntEntryPO { string key = 1; int32 value = 2; }
+message BatchClaimPO {
+  string reservation_id = 1;
+  string owner_operation_key = 2;
+  string token = 3;
+  repeated BatchIntEntryPO units = 4;
+}
+message BatchItemPO {
+  int64 sequence = 1;
+  string item_id = 2;
+  bytes payload = 3;
+  string compatibility_key = 4;
+  string area = 5;
+  repeated BatchIntEntryPO executions = 6;
+  repeated string lineage = 7;
+  repeated BatchClaimPO carried = 8;
+}
+message BatchManifestPO {
+  uint32 schema_version = 1;
+  string job_id = 2;
+  string batch_id = 3;
+  string area = 4;
+  string policy_version = 5;
+  repeated BatchItemPO items = 6;
+  int64 sealed_at = 7;
+}
+message BatchCompletedPO { bytes result = 1; }
+message BatchReasonPO { string reason = 1; }
+message BatchRetryPO { int64 delay_millis = 1; }
+message BatchRoutePO {
+  string area = 1;
+  string compatibility_key = 2;
+  int64 delay_millis = 3;
+}
+message BatchDecisionPO {
+  string item_id = 1;
+  oneof disposition {
+    BatchCompletedPO completed = 2;
+    BatchReasonPO failed = 3;
+    BatchRetryPO retry = 4;
+    BatchRoutePO route = 5;
+    BatchReasonPO hold = 6;
+  }
+}
+message BatchReleasePO { bytes proof = 1; }
+message BatchCarryPO {
+  string reservation_id = 1;
+  string owner_operation_key = 2;
+  repeated BatchIntEntryPO units = 3;
+  bytes proof = 4;
+}
+message BatchCompletionPO {
+  uint32 schema_version = 1;
+  repeated BatchDecisionPO decisions = 2;
+  oneof resource {
+    BatchReleasePO release = 3;
+    BatchCarryPO carry = 4;
+  }
+  bool retain_carried = 5;
+}
+
+// Canonical definition data used for the definition digest, including every limit.
+message BatchLimitsPO {
+  uint32 max_request_bytes = 1;
+  uint32 max_state_bytes = 2;
+  uint32 max_result_bytes = 3;
+  uint32 max_evidence_bytes = 4;
+  uint32 max_envelope_bytes = 5;
+  uint32 max_string_bytes = 6;
+  uint32 max_plan_steps = 7;
+  uint32 max_metadata_entries = 8;
+}
+message BatchSettingsPO {
+  uint32 max_accepted_items = 1;
+  uint32 max_active_items = 2;
+  uint32 max_active_bytes = 3;
+  uint32 max_item_bytes = 4;
+  uint32 max_result_bytes = 5;
+  uint32 max_concurrent_batches = 6;
+  uint32 max_transitions = 7;
+  uint32 max_batch_calls = 8;
+  uint32 max_reconciliations = 9;
+  int64 poll_interval_millis = 10;
+  int64 call_timeout_millis = 11;
+  BatchLimitsPO limits = 12;
+}
+message BatchCountOrWaitPO {
+  uint32 max_items = 1;
+  uint32 min_items = 2;
+  int64 max_wait_millis = 3;
+  bool allow_partial_on_close = 4;
+}
+message BatchAreaPO {
+  string id = 1;
+  string policy_version = 2;
+  oneof policy { BatchCountOrWaitPO count_or_wait = 3; }
+  repeated BatchIntEntryPO resources = 4;
+  uint32 parallelism = 5;
+  uint32 max_executions = 6;
+}
+message BatchDefinitionPO {
+  uint32 schema_version = 1;
+  string id = 2;
+  string version = 3;
+  repeated BatchAreaPO areas = 4;
+  BatchSettingsPO settings = 5;
+}
+
+enum BatchItemPhasePO {
+  ITEM_UNSPECIFIED = 0;
+  ITEM_PENDING = 1;
+  ITEM_RUNNING = 2;
+  ITEM_SUCCEEDED = 3;
+  ITEM_FAILED = 4;
+  ITEM_HELD = 5;
+}
+enum BatchActivePhasePO {
+  ACTIVE_UNSPECIFIED = 0;
+  ACTIVE_RESERVING = 1;
+  ACTIVE_PREPARING = 2;
+  ACTIVE_DELIVERING = 3;
+  ACTIVE_WAITING_CHILD = 4;
+  ACTIVE_RECONCILING_CHILD = 5;
+  ACTIVE_RELEASING_CARRIED = 6;
+  ACTIVE_RELEASING = 7;
+  ACTIVE_SETTLING = 8;
+  ACTIVE_BLOCKED = 9;
+}
+enum BatchJobPhasePO {
+  JOB_UNSPECIFIED = 0;
+  JOB_OPEN = 1;
+  JOB_CLOSING = 2;
+  JOB_CLOSING_BLOCKED = 3;
+  JOB_DRAINED = 4;
+  JOB_BLOCKED = 5;
+  JOB_RECOVERY_BLOCKED = 6;
+}
+message BatchRecordPO {
+  BatchItemPO item = 1;
+  string input_digest = 2;
+  BatchItemPhasePO phase = 3;
+  int64 accepted_at = 4;
+  int64 due_at = 5;
+  optional string batch_id = 6;
+  bytes result = 7;
+  optional string reason = 8;
+}
+// Resource/delivery values are embedded by value, not through another serializer.
+message BatchSubmissionPO {
+  string run_id = 1;
+  string definition_id = 2;
+  string definition_version = 3;
+  string codec_version = 4;
+  bytes initial_state = 5;
+}
+message BatchDeliveryPO {
+  string delivery_id = 1;
+  string source_run_id = 2;
+  string target = 3;
+  BatchSubmissionPO child = 4;
+  bytes payload = 5;
+}
+message BatchActivePO {
+  BatchManifestPO manifest = 1;
+  BatchActivePhasePO phase = 2;
+  BatchClaimPO grant = 3;
+  BatchDeliveryPO delivery = 4;
+  BatchCompletionPO completion = 5;
+  BatchClaimPO carry = 6;
+  uint32 released_carried = 7;
+  uint32 calls = 8;
+  int64 next_due = 9;
+  optional string reason = 10;
+  optional BatchActivePhasePO resume_phase = 11;
+  uint32 reconciliations = 12;
+}
+message BatchRecordEntryPO { int64 sequence = 1; BatchRecordPO record = 2; }
+message BatchActiveEntryPO { string batch_id = 1; BatchActivePO batch = 2; }
+message BatchStatePO {
+  uint32 schema_version = 1;
+  optional string job_id = 2;
+  optional string definition_digest = 3;
+  int64 next_sequence = 4;
+  int64 next_batch = 5;
+  bool closed = 6;
+  repeated BatchRecordEntryPO records = 7;
+  repeated BatchActiveEntryPO batches = 8;
+  optional string invalid = 9;
+}
+message BatchInitializedPO { string job_id = 1; string definition_digest = 2; }
+message BatchSettledPO { string batch_id = 1; repeated BatchRecordPO records = 2; }
+message BatchInputClosedPO {}
+message BatchEventPO {
+  uint32 schema_version = 1;
+  oneof event {
+    BatchInitializedPO initialized = 2;
+    BatchRecordPO input_accepted = 3;
+    BatchActivePO sealed = 4;
+    BatchActivePO advanced = 5;
+    BatchSettledPO settled = 6;
+    BatchRecordPO verified = 7;
+    BatchInputClosedPO input_closed = 8;
+  }
+}
+
+message BatchOfferPO {
+  int64 sequence = 1;
+  string item_id = 2;
+  bytes payload = 3;
+  string area = 4;
+  string compatibility_key = 5;
+  string reply_to = 6;
+}
+message BatchCloseInputPO { string reply_to = 1; }
+message BatchGetPO { string reply_to = 1; int64 after_sequence = 2; uint32 limit = 3; }
+message BatchReconcilePO { string batch_id = 1; string reply_to = 2; }
+message BatchVerifyItemPO {
+  int64 sequence = 1;
+  string verification_area = 2;
+  string compatibility_key = 3;
+  string reply_to = 4;
+}
+message BatchAcceptedPO { int64 sequence = 1; string item_id = 2; bool duplicate = 3; }
+message BatchItemViewPO {
+  int64 sequence = 1;
+  string item_id = 2;
+  string area = 3;
+  BatchItemPhasePO phase = 4;
+  repeated BatchIntEntryPO executions = 5;
+  optional string reason = 6;
+  bytes result = 7;
+}
+message BatchViewEntryPO {
+  string batch_id = 1;
+  string area = 2;
+  BatchActivePhasePO phase = 3;
+  repeated string item_ids = 4;
+  optional string reservation_id = 5;
+  optional string delivery_id = 6;
+  optional string reason = 7;
+}
+message BatchViewPO {
+  string job_id = 1;
+  BatchJobPhasePO phase = 2;
+  bool input_closed = 3;
+  int64 accepted = 4;
+  uint32 succeeded = 5;
+  uint32 failed = 6;
+  uint32 held = 7;
+  uint32 active = 8;
+  int64 active_bytes = 9;
+  repeated BatchViewEntryPO batches = 10;
+  repeated BatchItemViewPO items = 11;
+  bool truncated = 12;
+  optional string reason = 13;
+}
+message BatchWirePO {
+  uint32 schema_version = 1;
+  oneof message {
+    BatchOfferPO offer = 2;
+    BatchCloseInputPO close_input = 3;
+    BatchGetPO get = 4;
+    BatchReconcilePO reconcile = 5;
+    BatchVerifyItemPO verify_item = 6;
+    BatchAcceptedPO accepted = 7;
+    BatchReasonPO backpressured = 8;
+    BatchReasonPO rejected = 9;
+    BatchViewPO current = 10;
+  }
+}

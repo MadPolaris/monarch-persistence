@@ -1,0 +1,156 @@
+syntax = "proto3";
+
+package net.imadz.monarch.persistence.delivery.proto;
+
+import "scalapb/scalapb.proto";
+option (scalapb.options) = { flat_package: true };
+
+// Schema 1. Field numbers and oneof/enum alternatives are durable identities;
+// reserve removed numbers and never reuse them.
+message DeliverySubmissionPO {
+  string run_id = 1;
+  string definition_id = 2;
+  string definition_version = 3;
+  string codec_version = 4;
+  bytes initial_state = 5;
+}
+message DeliveryRequestPO {
+  string delivery_id = 1;
+  string source_run_id = 2;
+  string target = 3;
+  DeliverySubmissionPO child = 4;
+  bytes payload = 5;
+}
+message DeliveryChildIdentityPO {
+  string run_id = 1;
+  string definition_id = 2;
+  string definition_version = 3;
+  string codec_version = 4;
+  string initial_digest = 5;
+  string plan_digest = 6;
+}
+message DeliveryLimitsPO {
+  uint32 max_request_bytes = 1;
+  uint32 max_state_bytes = 2;
+  uint32 max_result_bytes = 3;
+  uint32 max_evidence_bytes = 4;
+  uint32 max_envelope_bytes = 5;
+  uint32 max_string_bytes = 6;
+  uint32 max_plan_steps = 7;
+  uint32 max_metadata_entries = 8;
+}
+message DeliveryPolicyPO {
+  int64 query_timeout_millis = 1;
+  int64 poll_interval_millis = 2;
+  uint32 max_polls = 3;
+  uint32 max_reconciliations = 4;
+  DeliveryLimitsPO limits = 5;
+}
+
+enum DeliveryPhasePO {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_EMPTY = 1;
+  PHASE_ACCEPTED = 2;
+  PHASE_STARTING = 3;
+  PHASE_RUNNING = 4;
+  PHASE_COMPLETED = 5;
+  PHASE_FAILED = 6;
+  PHASE_BLOCKED = 7;
+  PHASE_RECOVERY_BLOCKED = 8;
+}
+enum DeliveryActionPO {
+  ACTION_NONE = 0;
+  ACTION_ENSURE = 1;
+  ACTION_QUERY = 2;
+}
+
+message DeliveryAcceptedPO {
+  DeliveryRequestPO request = 1;
+  string request_digest = 2;
+  DeliveryPolicyPO policy = 3;
+}
+message DeliveryChildStartIntentPO { uint32 attempt = 1; }
+message DeliveryChildQueryIntentPO { uint32 poll = 1; }
+message DeliveryChildRunningPO {
+  DeliveryChildIdentityPO identity = 1;
+  optional int64 next_poll_at = 2;
+}
+message DeliveryChildTerminalRecordedPO {
+  DeliveryChildIdentityPO identity = 1;
+  DeliveryPhasePO phase = 2;
+  bytes result = 3;
+  optional string reason = 4;
+}
+message DeliveryBlockedPO { string reason = 1; }
+message DeliveryReconciledPO {
+  uint32 round = 1;
+  int64 next_poll_at = 2;
+}
+message DeliveryEventPO {
+  uint32 schema_version = 1;
+  oneof event {
+    DeliveryAcceptedPO accepted = 2;
+    DeliveryChildStartIntentPO child_start_intent = 3;
+    DeliveryChildQueryIntentPO child_query_intent = 4;
+    DeliveryChildRunningPO child_running = 5;
+    DeliveryChildTerminalRecordedPO child_terminal_recorded = 6;
+    DeliveryBlockedPO blocked = 7;
+    DeliveryReconciledPO reconciled = 8;
+  }
+}
+
+message DeliveryStatePO {
+  uint32 schema_version = 1;
+  uint32 state_version = 2;
+  DeliveryRequestPO request = 3;
+  optional string request_digest = 4;
+  DeliveryPolicyPO policy = 5;
+  DeliveryPhasePO phase = 6;
+  DeliveryChildIdentityPO child_identity = 7;
+  optional bytes result = 8;
+  optional string reason = 9;
+  DeliveryActionPO next_action = 10;
+  optional int64 next_poll_at = 11;
+  uint32 starts = 12;
+  uint32 polls = 13;
+  uint32 remaining_polls = 14;
+  uint32 reconciliations = 15;
+  optional string invalid = 16;
+}
+message DeliveryViewPO {
+  string delivery_id = 1;
+  optional string request_digest = 2;
+  optional string child_run_id = 3;
+  DeliveryPhasePO phase = 4;
+  optional bytes result = 5;
+  optional string reason = 6;
+  // A committed query grant, not a claim of business success or live I/O.
+  bool reconciling = 7;
+}
+message DeliveryDeliverPO {
+  DeliveryRequestPO request = 1;
+  string reply_to = 2;
+}
+message DeliveryGetPO {
+  string delivery_id = 1;
+  string reply_to = 2;
+}
+message DeliveryReconcilePO {
+  string delivery_id = 1;
+  string reply_to = 2;
+}
+message DeliveryCurrentPO { DeliveryViewPO view = 1; }
+message DeliveryRejectedPO {
+  string delivery_id = 1;
+  string reason = 2;
+}
+message DeliveryWirePO {
+  uint32 schema_version = 1;
+  oneof message {
+    DeliveryDeliverPO deliver = 2;
+    DeliveryGetPO get = 3;
+    DeliveryReconcilePO reconcile = 4;
+    DeliveryCurrentPO current = 5;
+    DeliveryRejectedPO rejected = 6;
+  }
+}

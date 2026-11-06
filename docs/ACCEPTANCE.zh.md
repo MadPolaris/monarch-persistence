@@ -1,8 +1,8 @@
-# R1 可靠步骤执行：验收记录
+# Monarch 可恢复操作与耐久工作流：验收记录
 
-## 范围与状态
+## R1 历史范围与状态
 
-2026-11-06 开始实施；设计见 [RECOVERABLE_OPERATIONS_DESIGN.zh.md](RECOVERABLE_OPERATIONS_DESIGN.zh.md)。首轮仅 G0→G1。G2–G4 未实施。本文件区分已执行证据与待验证条件，不以设计替代测试。
+2026-11-06 开始实施；设计见 [RECOVERABLE_OPERATIONS_DESIGN.zh.md](RECOVERABLE_OPERATIONS_DESIGN.zh.md)。以下 G0/G1 是已经提交的 R1 历史证据；用户随后授权继续 G2–G4。R2 的新实现与验证不回写为 R1 成果，见本文件后续 R2 节及 [DURABLE_WORKFLOWS.zh.md](DURABLE_WORKFLOWS.zh.md)。
 
 - 设计提交：`ed0b01c`；分支 `feature/monarch-recoverable-operations`。
 - 运行时起点：persistence `e6a6031`，core `376b152`。
@@ -110,10 +110,72 @@ sbt -batch -Dmonarch.core.repository="$REPOSITORY" \
 
 较早一次过长的Run审阅被主动停止，不计为完整审阅。Operation编写代理在最终回归前停止；接管时核对其最后的replay校验修改并由主会话补测。所有结论以实际源码及测试为准。
 
-## 未认证与后续范围
+## R1 当时未认证与后续范围（历史记录）
 
-- R1核心实现、独立审阅修正、测试与公共JAR恢复证据已完成，停在G1；完整设计仍有G2–G4未实施。
+以下描述 R1 验收时的边界，不表示后续 R2 没有实现。
+
+- R1核心实现、独立审阅修正、测试与公共JAR恢复证据已完成，首轮停在G1；完整设计的G2–G4随后获用户授权继续实施。
 - 空消费者依赖缓存构建通过：`target/r1-cold-consumer-cjmXHg` 为新建目录，独立Ivy/Coursier缓存和构建target；examples重新编译3个源码成功。60项classpath中57个第三方JAR来自新缓存，0项来自全局`Library/Caches`或`.ivy2`；另外是examples classes及2个明确的本地产品JAR。仍复用本机JDK/sbt launcher与构建插件启动环境，不称为裸机安装认证。
-- 本轮不含G2资源/交接、G3批调度、G4现有银行/Fab迁移；消费者工作树未改。
+- R1这一轮不含G2资源/交接、G3批调度、G4现有银行/Fab迁移；当时消费者工作树未改。
 - 未做真实银行/设备、生产journal、物理断电、存储损坏、脑裂或SLA认证。journal中的历史/终态默认不删除；长期磁盘留存由宿主治理。
 - 全局活跃实体/外部连接并发须由宿主限制；共享ManagedOperations只限制该实例本地等待/查询，不冒充全局资源调度器。
+
+## R2 实施与验收（2026-11-06）
+
+用户在R1验收提交后明确授权“都提交，然后继续彻底完成”。R1源码提交为 `d2fd6df`。R2仍在同一短期feature分支演进，消费者使用各自 `feature/monarch-complete-workflow`；不推送、不覆盖历史制品、不混入已有dirty。
+
+### 已执行结果
+
+| 验收 | 结果 |
+|---|---|
+| 资源与Inbox首轮 | 39/39 |
+| 32个完整JVM场景首轮 | 32/32，独立BUSINESS账本及资源关闭验证 |
+| 全量（含R1与R2、128×1KiB容量快速回归） | 29 suites，185/185，0失败/0跳过，MiMa通过 |
+| 最后受影响的协议/空缓存宿主查证/批活性回归 | 7 suites，43/43，MiMa通过 |
+| 新R2候选 + public-artifact examples | 构建成功，5个独立入口/夹具源码编译成功 |
+| Bank/Fab构建及HTTP门 | 两域独立target完整编译，策略7/7＋10/10，真实HTTP/整Play JVM恢复均通过 |
+| 最终候选artifact-only矩阵 | 4 suites，49/49：R2 32＋R1 14＋外部账本3，0失败/0跳过 |
+| 全新消费者缓存 | 5源码编译通过；60项classpath中57个第三方JAR来自独占新cache，0全局cache项 |
+
+185测试的全量运行期间仅继续准备最后的空缓存宿主查证修正；因此185/185不是最后每一字节的全量快照。最后43项回归覆盖受影响代码；最终公共候选49/49矩阵再次验证真实进程行为。此前32场景和全量均保留独立证据。
+
+32场景包含：Bank/Fab正常及Ongoing宿主强杀；两领域分别在Accepted、ChildStartIntent、ChildTerminalRecorded、GrantRecorded、ReleaseRecorded、Settled的提交前与已force未ACK；Fab另有TransferRecorded两边界；Bank封批两边界。每个资源/交接边界场景最后再次重启终态，外部COUNT保持不变。`WORKFLOW_RESOURCES_CLOSED`来源是测试full-capacity sentinel获批，证明此前执行/物理占位已关闭，sentinel留在该退休测试域。
+
+### 候选（不可覆盖）
+
+- 版本：`0.3.0-dev.r2-20261106-dc168f96fa62`。
+- 新目录：`target/r2-candidate-20261106-dc168f96fa62/`。
+- 产品源码/build/project长度分帧SHA-256：`dc168f96fa62700537644e486e64a44b38bfa77f8e897e54c3bf68d0fa94687d`。
+- persistence JAR SHA-256：`2dea09f3c97b4832fd78552f546a1d5fb4f68d5b92c42cb3d4466101c59d21b0`。
+- core仍为上文固定0.2.1 / `66223d37...`，没有重新发布core。
+- examples runtime classpath 60项；无产品target/classes/test-classes；产品JAR无Fixture/ValidationJournal/Spec类。
+- 候选内source-manifest逐文件核验一致；制品与classpath证据：`target/r2-build-evidence-dc168f96fa62/`。
+- 最终artifact-only49/49通过；逐份核对118个宿主日志（R1 30、R2 88）的两项CodeSource/路径/SHA，全部是上述persistence和固定core JAR，无产品classes目录；`origins.json`列出全部日志。
+- `target/r2-cold-consumer-fekhxoef/`是新建独立消费者build、Ivy/Coursier缓存与target；重新编译5个源码，60项classpath中57个第三方JAR全部来自新cache，0全局`Library/Caches`/`.ivy2`项。仍复用本机JDK/sbt启动环境，不宣称裸机安装。
+- 真实进程矩阵证据：`target/r2-final-artifact-evidence-20261106/`；包含源与宿主WAL、被杀进程/恢复/终态日志及waited退出记录。
+
+### Bank/Fab 真实 HTTP 与整应用 JVM 门
+
+- Bank：7/7策略测试、独立target完整编译/stage；Fab：10/10策略测试、完整编译/stage。
+- 同一验证脚本 `examples/verify_http_consumers.py`，使用动态独占loopback端口、不同外部WAL/应用LevelDB路径、随机运行时secret。验证JS语法与真实HTTP，不宣称浏览器视觉自动化。
+- 每领域三组合同：正常完成＋重复输入/计数冲突；Operation/Inbox预算阻塞后杀整个Play JVM、外部完成任务、全新JVM查证原身份；终态再启且COUNT不变。
+- CSRF缺失POST得到403；控制器只允许loopback请求，完成按钮不接受用户伪造成功结果。
+- Bank两个作业6项：credit6/purchase6/balance0/holding600；只有指定失败项再次充值，申购各一次；10个外部任务＝10次submit，duplicateEffects=0。
+- Fab两个作业4FOUP：全部accepted/unloaded回stocker；指定item-1只返工一次、量测两次；24个外部任务＝24次submit，duplicateEffects=0。
+- 两应用实际CodeSource指向stage内上述候选JAR，SHA完全一致；不是仅pom依赖声明。每领域三个不同Play PID与独立external PID已停止并waited=true。
+- PASS证据：`target/r2-http-evidence-20261106/r2-http-bank-tj3yjx0p/`、`target/r2-http-evidence-20261106/r2-http-fab-8fhho6pj/`。
+- 首次HTTP启动只指定`-Dhttp.port`没覆盖profile内`play.server.http.port`，因此超时；原失败证据保留，新验证器显式设两者并使用独占cwd后通过。未修改运行时制品。
+- 消费者构建中的新路由曾覆盖旧`controllers.routes`；改为独立AutoPlugin＋forward-only新增路由，旧源码/配置不动。关闭R2时分别检查两仓的实际sources、routes tasks、dependencyOverrides，确认均无本次新增项；检查日志在`target/r2-build-evidence-dc168f96fa62/*-r2-off.log`。
+
+### 已修正问题和证据诚实边界
+
+- 封批gate期间EOF可能尚未提交；fixture改为重放同一不可变源和EOF，不能把恢复强制关输入算修复。相应Scala裸block和testkit调用语法错误均已修正。
+- resource严格FIFO可能挡住占位者续行，改oldest-fitting；批调度增加carried后继优先、共享claim全部holder同目标/延迟、轮转、字节压力封尾批。
+- 逐项execution/lineage预算边界、非法Advanced/Settled/Verified历史、未持有新grant却把Transfer当Release等已加反例。
+- Inbox查证授权提交后仍是Blocked；新增只读 `View.reconciling` 表达已记录查询授权，父批继续等证据而非误判拒绝。
+- 完整宿主的显式人工查证从原operation到inbox/batch接通；新宿主空缓存根据已提交job激活原operation，不依赖旧内存表。自动轮询不会授予新预算。
+- 资源/Delivery独立审阅代理因上游422失败，没有可用完整独立审阅结果；由主会话阅读关键实现和验证，并以实际反例与回归收口，不声称多票审阅通过。
+- 首轮32场景中进程stdout关闭有一次读取线程race；增加本夹具主动停止标记后，全量复跑无此异常。未吞正常运行中的I/O错误。
+- 工具偶发ENOSPC提示；实际df仍有约19GiB，证据只有数MiB；未删除其他目录或缓存。
+
+证据：`target/r2-boundaries-20261106/`、`target/r2-full-regression-20261106/`。运行时保证及非目标见 [DURABLE_WORKFLOWS.zh.md](DURABLE_WORKFLOWS.zh.md)：有限job、单有效writer、可靠journal；无真实银行/FTP/TA/设备、物理断电/损坏/脑裂/SLA认证。

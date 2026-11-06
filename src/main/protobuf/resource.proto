@@ -1,0 +1,104 @@
+syntax = "proto3";
+package net.imadz.monarch.persistence.resource.proto;
+import "scalapb/scalapb.proto";
+option (scalapb.options) = { flat_package: true };
+
+// Schema 1. Field/oneof numbers are durable identities; never reuse removed numbers.
+// Repeated entries (rather than protobuf maps) allow rejecting duplicate resource IDs.
+message ResourceUnitPO { string resource = 1; int32 units = 2; }
+message ResourceRequestPO {
+  string reservation_id = 1;
+  string owner_operation_key = 2;
+  repeated ResourceUnitPO units = 3;
+}
+message ResourceGrantPO {
+  string reservation_id = 1;
+  string owner_operation_key = 2;
+  string token = 3;
+  repeated ResourceUnitPO units = 4;
+}
+message ResourceProofPO { string operation_key = 1; bytes evidence = 2; }
+message ResourceLimitsPO {
+  uint32 max_request_bytes = 1;
+  uint32 max_state_bytes = 2;
+  uint32 max_result_bytes = 3;
+  uint32 max_evidence_bytes = 4;
+  uint32 max_envelope_bytes = 5;
+  uint32 max_string_bytes = 6;
+  uint32 max_plan_steps = 7;
+  uint32 max_metadata_entries = 8;
+}
+message ResourceSettingsPO {
+  uint32 max_reservations = 1;
+  uint32 max_queued = 2;
+  ResourceLimitsPO limits = 3;
+}
+message ResourceDefinitionPO {
+  string coordinator_id = 1;
+  repeated ResourceUnitPO capacities = 2;
+  ResourceSettingsPO settings = 3;
+}
+message ResourceDefinedPO { ResourceDefinitionPO definition = 1; string fingerprint = 2; }
+message ResourceReleaseRecordedPO {
+  string reservation_id = 1;
+  string token = 2;
+  ResourceProofPO proof = 3;
+}
+message ResourceTransferRecordedPO {
+  string reservation_id = 1;
+  string token = 2;
+  ResourceGrantPO target = 3;
+  ResourceProofPO proof = 4;
+}
+message ResourceEventPO {
+  uint32 schema_version = 1;
+  oneof event {
+    ResourceDefinedPO definition_recorded = 2;
+    ResourceRequestPO enqueued = 3;
+    ResourceGrantPO grant_recorded = 4;
+    ResourceReleaseRecordedPO release_recorded = 5;
+    ResourceTransferRecordedPO transfer_recorded = 6;
+  }
+}
+message ResourceClosurePO { string fingerprint = 1; optional string target_reservation_id = 2; }
+message ResourceRecordPO {
+  ResourceRequestPO request = 1;
+  bool granted = 2;
+  ResourceClosurePO closure = 3;
+}
+message ResourceStatePO {
+  uint32 schema_version = 1;
+  uint32 state_version = 2;
+  ResourceDefinitionPO definition = 3;
+  repeated ResourceRecordPO records = 4;
+  repeated string queue = 5;
+  optional string invalid = 6;
+}
+message ResourceReservePO { ResourceRequestPO request = 1; string reply_to = 2; }
+message ResourceQueryPO { string reservation_id = 1; string reply_to = 2; }
+message ResourceReleasePO { ResourceReleaseRecordedPO release = 1; string reply_to = 2; }
+message ResourceTransferPO {
+  string reservation_id = 1;
+  string token = 2;
+  string to_reservation_id = 3;
+  string to_owner_operation_key = 4;
+  repeated ResourceUnitPO units = 5;
+  ResourceProofPO proof = 6;
+  string reply_to = 7;
+}
+message ResourceIdPO { string reservation_id = 1; }
+message ResourceReasonPO { string reservation_id = 1; string reason = 2; }
+message ResourceWirePO {
+  uint32 schema_version = 1;
+  oneof message {
+    ResourceReservePO reserve = 2;
+    ResourceQueryPO query = 3;
+    ResourceReleasePO release = 4;
+    ResourceTransferPO transfer = 5;
+    ResourceGrantPO granted = 6;
+    ResourceIdPO queued = 7;
+    ResourceIdPO released = 8;
+    ResourceReasonPO rejected = 9;
+    ResourceReasonPO unknown = 10;
+  }
+}

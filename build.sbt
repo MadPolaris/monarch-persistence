@@ -7,7 +7,7 @@ ThisBuild / versionScheme := Some("early-semver")
 lazy val root = (project in file(".")).settings(name := "monarch-persistence")
 
 // Deliberately resolves the public candidate artifact, not dependsOn(root) or test classes.
-// The three explicit sources are standalone fixture/consumer entrypoints, not library code.
+// The explicit sources are standalone fixture/consumer entrypoints, not library code.
 lazy val examples = (project in file("examples")).settings(
   name := "monarch-recoverable-examples",
   publish / skip := true,
@@ -16,7 +16,8 @@ lazy val examples = (project in file("examples")).settings(
   Compile / run / fork := true,
   Compile / unmanagedSources ++= {
     val fixtures = baseDirectory.value.getParentFile / "src" / "test" / "scala" / "net" / "imadz" / "monarch" / "persistence"
-    Seq("ExternalTaskServiceFixture.scala", "SerializedValidationJournal.scala", "ManagedOperationJvmHost.scala").map(fixtures / _)
+    Seq("ExternalTaskServiceFixture.scala", "SerializedValidationJournal.scala", "ManagedOperationJvmHost.scala",
+      "CompleteWorkflowProgram.scala", "CompleteWorkflowJvmHost.scala").map(fixtures / _)
   },
   resolvers ++= sys.props.get("monarch.example.repository").toSeq.map("monarch-r1-example" at _),
   resolvers ++= sys.props.get("monarch.core.repository").toSeq.map("monarch-core-example" at _),

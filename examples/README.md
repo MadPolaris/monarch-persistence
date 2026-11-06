@@ -1,9 +1,10 @@
-# R1 public-artifact examples
+# Public-artifact examples：R1 与 R2
 
 这些入口以公开 Maven 坐标消费 `monarch-persistence` 候选 JAR 和固定 core JAR，不 `dependsOn(root)`，不把产品 `target/classes` 偷渡到消费者 classpath。
 
 - `net.imadz.monarch.persistence.ExternalTaskServiceFixture`：独立本机外部任务服务，自己的耐久接受／效果账本，仅模拟银行与 Fab。
-- `net.imadz.monarch.persistence.ManagedOperationJvmHost`：通过公开 `managedBehavior`、`ManagedOperations`、`PersistentOperation` API 接线。
+- `net.imadz.monarch.persistence.ManagedOperationJvmHost`：R1，通过公开 `managedBehavior`、`ManagedOperations`、`PersistentOperation` API 接线。
+- `CompleteWorkflowProgram` / `CompleteWorkflowJvmHost`：R2，银行充值→申购和Fab搬运→加工→量测/返工→卸载；只使用公共 `WorkflowHost`。
 - `SerializedValidationJournal`：测试专用真实序列化文件 journal，不是产品插件。
 
 上述源码由根构建按精确文件名引用测试夹具，避免复制两份实现；examples 不发布。测试断言和所有 Operation/Run 的产品源码均不作为 examples 源码输入。
@@ -56,4 +57,31 @@ sbt -batch \
 
 测试只停止自身创建的进程，先等待旧宿主退出，再用同一 journal 启动新宿主。外部效果账本、过程日志与 PID/退出记录保留在证据目录。
 
-此示例不证明真实银行/设备集成、物理断电或脑裂恢复；也不包含 G2 的资源准入或 G3 的批调度。实际执行结果见 `../docs/ACCEPTANCE.zh.md`。
+## R2 完整样本与消费者 HTTP 门
+
+```bash
+java -cp "$EXAMPLE_CLASSPATH" \
+  net.imadz.monarch.persistence.CompleteWorkflowJvmHost \
+  /absolute/owned/host-journal <external-port> bank workflow-bank first
+# Fab：把 bank workflow-bank 换成 fab workflow-fab。
+```
+
+输入是不可变的有限源，恢复时用相同参数/存储（mode可改recover），重放稳定 offers 与 EOF；不擅自把未记录EOF的源关闭。`TASKS`/`COMPLETE` 由独立测试驱动，宿主本身不完成外部任务。`WORKFLOW_DONE` 之前先取得测试用full-capacity sentinel，证明所有执行/物理占位均已关闭；该最后sentinel留在已退休的测试资源域，不能作为生产cleanup实现。
+
+同样传入 `monarch.validation.consumer.classpath`，运行 `CompleteWorkflowJvmSpec` 可用公共JAR复跑完整正常和JVM故障矩阵。它核对外部BUSINESS账本、原子文件journal和终态再次恢复，非只检查页面状态。
+
+`verify_http_consumers.py` 在应用已 `web / stage` 后，串行启动独占外部JVM与Play应用，用真实HTTP验证：页面/JS语法、CSRF、稳定输入去重与冲突、业务排空、两个预算阻塞后杀整个应用JVM/显式查证、终态再恢复和外部余额/持仓/卸载。它比浏览器UI自动化范围小：没有宣称视觉或浏览器兼容性验收。
+
+```bash
+python3 examples/verify_http_consumers.py \
+  --java "$JAVA_HOME/bin/java" \
+  --fixture-classpath "$EXAMPLE_CLASSPATH" \
+  --bank-stage /absolute/bank-batch-transactor-demo/web/target/universal/stage \
+  --fab-stage /absolute/fab-simulator-demo/web/target/universal/stage \
+  --expected-persistence-sha <候选JAR的SHA256> \
+  --evidence-root /absolute/owned/http-evidence
+```
+
+每次创建新临时子目录与自己的process group，端口动态选择；只停止自己启动的进程，所有证据保留。浏览器控制用的secret在运行时随机注入，不写入仓库。
+
+这些示例不证明真实银行/设备集成、物理断电或脑裂恢复。实际执行结果见 `../docs/ACCEPTANCE.zh.md`。
