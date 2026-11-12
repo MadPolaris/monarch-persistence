@@ -22,7 +22,7 @@ lazy val examples = (project in file("examples")).settings(
   resolvers ++= sys.props.get("monarch.example.repository").toSeq.map("monarch-r1-example" at _),
   resolvers ++= sys.props.get("monarch.core.repository").toSeq.map("monarch-core-example" at _),
   libraryDependencies ++= Seq(
-    "net.imadz" %% "monarch-persistence" % sys.props.getOrElse("monarch.example.version", "0.3.0-dev.unpublished"),
+    "net.imadz" %% "monarch-persistence" % sys.props.getOrElse("monarch.example.version", "0.3.0"),
     "ch.qos.logback" % "logback-classic" % "1.2.13"
   )
 )
@@ -65,7 +65,7 @@ Compile / PB.targets := Seq(scalapb.gen() -> (Compile / sourceManaged).value / "
 
 libraryDependencies ++= Seq(
   "com.thesamet.scalapb" %% "scalapb-runtime" % "0.11.14" % "protobuf",
-  "net.imadz" %% "monarch-core" % sys.props.getOrElse("monarch.core.version", "0.2.1"),
+  "net.imadz" %% "monarch-core" % sys.props.getOrElse("monarch.core.version", "0.3.0"),
   "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
   "com.typesafe.akka" %% "akka-persistence-typed" % akkaVersion,
   "com.typesafe.akka" %% "akka-serialization-jackson" % akkaVersion,
